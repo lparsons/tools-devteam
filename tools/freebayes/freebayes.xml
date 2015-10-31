@@ -4,49 +4,71 @@
     <requirements>
         <requirement type="package" version="0_9_20_b040236">freebayes</requirement>
         <requirement type="package" version="0.1.18">samtools</requirement>
+        <requirement type="package" version="4.1.0">gnu_awk</requirement>
+        <requirement type="package" version="20131122">gnu_parallel</requirement>
     </requirements>
     <stdio>
         <exit_code range="1:" />
     </stdio>
     <command>
+<![CDATA[
     ##set up input files
 
     #set $reference_fasta_filename = "localref.fa"
 
     #if str( $reference_source.reference_source_selector ) == "history":
-        ln -s "${reference_source.ref_file}" "${reference_fasta_filename}" &amp;&amp;
-        samtools faidx "${reference_fasta_filename}" 2&gt;&amp;1 || echo "Error running samtools faidx for FreeBayes" &gt;&amp;2 &amp;&amp;
+        ln -s "${reference_source.ref_file}" "${reference_fasta_filename}" &&
+        samtools faidx "${reference_fasta_filename}" 2>&1 || echo "Error running samtools faidx for FreeBayes" >&2 &&
     #else:
         #set $reference_fasta_filename = str( $reference_source.ref_file.fields.path )
     #end if
 
     #for $bam_count, $input_bam in enumerate( $reference_source.input_bams ):
-        ln -s "${input_bam.input_bam}" "localbam_${bam_count}.bam" &amp;&amp;
-        ln -s "${input_bam.input_bam.metadata.bam_index}" "localbam_${bam_count}.bam.bai" &amp;&amp;
+        ln -s "${input_bam}" "b_${bam_count}.bam" &&
+        ln -s "${input_bam.metadata.bam_index}" "b_${bam_count}.bam.bai" &&
     #end for
 
     ## Tabixize optional input_varinat_vcf file (for --variant-input option)
     #if ( str( $options_type.options_type_selector ) == 'cline' or str( $options_type.options_type_selector ) == 'full' ) and $options_type.optional_inputs.optional_inputs_selector and str( $options_type.optional_inputs.input_variant_type.input_variant_type_selector ) == "provide_vcf":
-        ln -s "${options_type.optional_inputs.input_variant_type.input_variant_vcf}" "input_variant_vcf.vcf.gz" &amp;&amp;
-        ln -s "${Tabixized_input}" "input_variant_vcf.vcf.gz.tbi" &amp;&amp;
+        ln -s "${options_type.optional_inputs.input_variant_type.input_variant_vcf}" "input_variant_vcf.vcf.gz" &&
+        ln -s "${Tabixized_input}" "input_variant_vcf.vcf.gz.tbi" &&
     #end if
 
-    ##finished setting up inputs
-    ##COMMAND LINE STARTS HERE
+    #for $bam_count, $input_bam in enumerate( $reference_source.input_bams ):
+        samtools view -H b_${bam_count}.bam | grep "^@SQ" | cut -f 2- | awk '{ gsub("^SN:","",$1); gsub("^LN:","",$2); print $1"\t0\t"$2; }' >> regions_all.bed &&
+        sort -u regions_all.bed > regions_uniq.bed &&
+        bedtools makewindows -b regions_uniq.bed -w 10000000 -s 9990000 > regions.bed &&
+    #end for
+
+    mkdir vcf_output &&
+    mkdir failed_alleles &&
+    mkdir trace &&
+
+    ## Finished setting up inputs
+
+    for i in `cat regions.bed | awk '{print $1":"$2".."$3}'`;
+    do
+
+    echo "
+
+    ## COMMAND LINE STARTS HERE
 
     freebayes
-    #for $bam_count, $input_bam in enumerate( $reference_source.input_bams ):
-        --bam "localbam_${bam_count}.bam"
-    #end for
-    --fasta-reference "${reference_fasta_filename}"
 
-    ##outputs
-    --vcf "${output_vcf}"
+    --region \$i
+
+    #for $bam_count, $input_bam in enumerate( $reference_source.input_bams ):
+        --bam 'b_${bam_count}.bam'
+    #end for
+    --fasta-reference '${reference_fasta_filename}'
+
+    ## Outputs
+    --vcf ./vcf_output/part_'\$i'.vcf
 
     #if str( $target_limit_type.target_limit_type_selector ) == "limit_by_target_file":
-        --targets "${target_limit_type.input_target_bed}"
+        --targets '${target_limit_type.input_target_bed}'
     #elif str( $target_limit_type.target_limit_type_selector ) == "limit_by_region":
-        --region "${target_limit_type.region_chromosome}:${target_limit_type.region_start}..${target_limit_type.region_end}"
+        --region '${target_limit_type.region_chromosome}:${target_limit_type.region_start}..${target_limit_type.region_end}'
     #end if
 
     ##advanced options
@@ -55,7 +77,7 @@
 
     #elif str( $options_type.options_type_selector ) == "simple_w_filters":
         --standard-filters
-        --min-coverage "${options_type.min_coverage}"
+        --min-coverage '${options_type.min_coverage}'
     #elif str( $options_type.options_type_selector ) == "naive":
         --haplotype-length 0
         --min-alternate-count 1
@@ -69,7 +91,7 @@
         --pooled-continuous
         --report-monomorphic
         --standard-filters
-        --min-coverage "${options_type.min_coverage}"
+        --min-coverage '${options_type.min_coverage}'
 
     ## Command line direct text entry is not allowed at this time for security reasons
     #elif str( $options_type.options_type_selector ) == "full":
@@ -77,32 +99,32 @@
             ${options_type.optional_inputs.report_monomorphic}
 
             #if $options_type.optional_inputs.output_trace_option:
-                --trace "${output_trace}"
+                --trace ./trace/part_'\$i'.txt
             #end if
             #if $options_type.optional_inputs.output_failed_alleles_option:
-                --failed-alleles "${output_failed_alleles_bed}"
+                --failed-alleles ./failed_alleles/part_'\$i'.bed
             #end if
             #if $options_type.optional_inputs.samples:
-                --samples "${options_type.optional_inputs.samples}"
+                --samples '${options_type.optional_inputs.samples}'
             #end if
             #if $options_type.optional_inputs.populations:
-                --populations "${options_type.optional_inputs.populations}"
+                --populations '${options_type.optional_inputs.populations}'
             #end if
             #if $options_type.optional_inputs.A:
-                --cnv-map "${options_type.optional_inputs.A}"
+                --cnv-map '${options_type.optional_inputs.A}'
             #end if
             #if str( $options_type.optional_inputs.input_variant_type.input_variant_type_selector ) == "provide_vcf":
-                --variant-input "input_variant_vcf.vcf.gz"  ## input_variant_vcf.vcf.gz is symlinked to a galaxy-generated dataset in "Tabixize optional input_varinat_vcf file" section of the command line above
+                --variant-input 'input_variant_vcf.vcf.gz'  ## input_variant_vcf.vcf.gz is symlinked to a galaxy-generated dataset in "Tabixize optional input_varinat_vcf file" section of the command line above
                 ${options_type.optional_inputs.input_variant_type.only_use_input_alleles}
             #end if
             #if $options_type.optional_inputs.haplotype_basis_alleles:
-                --haplotype-basis-alleles "${options_type.optional_inputs.haplotype_basis_alleles}"
+                --haplotype-basis-alleles '${options_type.optional_inputs.haplotype_basis_alleles}'
             #end if
             #if $options_type.optional_inputs.observation_bias:
-                --observation-bias "${options_type.optional_inputs.observation_bias}"
+                --observation-bias '${options_type.optional_inputs.observation_bias}'
             #end if
             #if $options_type.optional_inputs.contamination_estimates:
-                --contamination-estimates "${options_type.optional_inputs.contamination_estimates}"
+                --contamination-estimates '${options_type.optional_inputs.contamination_estimates}'
             #end if
         #end if
 
@@ -112,8 +134,8 @@
         #end if
     ## POPULATION MODEL
         #if str( $options_type.population_model.population_model_selector ) == "True":
-            --theta "${options_type.population_model.T}"
-            --ploidy "${options_type.population_model.P}"
+            --theta '${options_type.population_model.T}'
+            --ploidy '${options_type.population_model.P}'
             ${options_type.population_model.J}
             ${options_type.population_model.K}
         #end if
@@ -121,7 +143,7 @@
     ## REFERENCE ALLELE
         #if str( $options_type.reference_allele.reference_allele_selector ) == "True":
             ${options_type.reference_allele.Z}
-            --reference-quality "${options_type.reference_allele.reference_quality}"
+            --reference-quality '${options_type.reference_allele.reference_quality}'
         #end if
 
     ## ALLELE SCOPE
@@ -130,10 +152,10 @@
             ${options_type.allele_scope.i}
             ${options_type.allele_scope.X}
             ${options_type.allele_scope.u}
-            -n "${options_type.allele_scope.n}"
-            --haplotype-length "${options_type.allele_scope.haplotype_length}"
-            --min-repeat-size "${options_type.allele_scope.min_repeat_length}"
-            --min-repeat-entropy "${options_type.allele_scope.min_repeat_entropy}"
+            -n '${options_type.allele_scope.n}'
+            --haplotype-length '${options_type.allele_scope.haplotype_length}'
+            --min-repeat-size '${options_type.allele_scope.min_repeat_length}'
+            --min-repeat-entropy '${options_type.allele_scope.min_repeat_entropy}'
             ${options_type.allele_scope.no_partial_observations}
         #end if
 
@@ -143,24 +165,24 @@
     ##INPUT FILTERS
         #if str( $options_type.input_filters.input_filters_selector ) == "True":
             ${options_type.input_filters.use_duplicate_reads}
-            -m "${options_type.input_filters.m}"
-            -q "${options_type.input_filters.q}"
-            -R "${options_type.input_filters.R}"
-            -Y "${options_type.input_filters.Y}"
+            -m '${options_type.input_filters.m}'
+            -q '${options_type.input_filters.q}'
+            -R '${options_type.input_filters.R}'
+            -Y '${options_type.input_filters.Y}'
 
             #if str( $options_type.input_filters.mismatch_filters.mismatch_filters_selector ) == "True":
-              -Q "${options_type.input_filters.mismatch_filters.Q}"
-              -U "${options_type.input_filters.mismatch_filters.U}"
-              -z "${options_type.input_filters.mismatch_filters.z}"
-              --read-snp-limit "${options_type.input_filters.mismatch_filters.read_snp_limit}"
+              -Q '${options_type.input_filters.mismatch_filters.Q}'
+              -U '${options_type.input_filters.mismatch_filters.U}'
+              -z '${options_type.input_filters.mismatch_filters.z}'
+              --read-snp-limit '${options_type.input_filters.mismatch_filters.read_snp_limit}'
             #end if
 
-            -e "${options_type.input_filters.e}"
-            -F "${options_type.input_filters.F}"
-            -C "${options_type.input_filters.C}"
+            -e '${options_type.input_filters.e}'
+            -F '${options_type.input_filters.F}'
+            -C '${options_type.input_filters.C}'
             --min-alternate-qsum "${options_type.input_filters.min_alternate_qsum}"
-            -G "${options_type.input_filters.G}"
-            --min-coverage "${options_type.input_filters.min_coverage}"
+            -G '${options_type.input_filters.G}'
+            --min-coverage '${options_type.input_filters.min_coverage}'
         #end if
 
     ## POPULATION AND MAPPABILITY PRIORS
@@ -173,29 +195,67 @@
 
     ## GENOTYPE LIKELIHOODS
         #if str( $options_type.genotype_likelihoods.genotype_likelihoods_selector ) == "True":
-          --base-quality-cap "${$options_type.genotype_likelihoods.base_quality_cap}"
+          --base-quality-cap '${$options_type.genotype_likelihoods.base_quality_cap}'
           ${$options_type.genotype_likelihoods.experimental_gls}
-          --prob-contamination "${$options_type.genotype_likelihoods.prob_contamination}"
+          --prob-contamination '${$options_type.genotype_likelihoods.prob_contamination}'
         #end if
 
     ## ALGORITHMIC FEATURES
         #if str( $options_type.algorithmic_features.algorithmic_features_selector ) == "True":
             ${options_type.algorithmic_features.report_genotype_likelihood_max}
-            -B "${options_type.algorithmic_features.B}"
-            --genotyping-max-banddepth "${options_type.algorithmic_features.genotyping_max_banddepth}"
-            -W "${options_type.algorithmic_features.W}"
+            -B '${options_type.algorithmic_features.B}'
+            --genotyping-max-banddepth '${options_type.algorithmic_features.genotyping_max_banddepth}'
+            -W '${options_type.algorithmic_features.W}'
             ${options_type.algorithmic_features.N}
 
             #if str( $options_type.algorithmic_features.genotype_variant_threshold.genotype_variant_threshold_selector ) == "True":
-                -S "${options_type.algorithmic_features.genotype_variant_threshold.S}"
+                -S '${options_type.algorithmic_features.genotype_variant_threshold.S}'
             #end if
 
             ${options_type.algorithmic_features.j}
             ${options_type.algorithmic_features.H}
-            -D "${options_type.algorithmic_features.D}"
+            -D '${options_type.algorithmic_features.D}'
             ${options_type.algorithmic_features.genotype_qualities}
         #end if
     #end if
+
+    ";
+    done > freebayes_commands.sh &&
+    cat freebayes_commands.sh | parallel --no-notice -j \${GALAXY_SLOTS:-1} &&
+
+    ## make VCF header
+
+    grep "^#" ./vcf_output/part_\$i.vcf > header.txt &&
+
+    for i in `cat regions.bed | awk '{print $1":"$2".."$3}'`;
+    do
+        ## if this fails then it bails out the script
+        cat ./vcf_output/part_"\$i".vcf | grep -v "^#" || true
+        ;
+    done | sort -k1,1 -k2,2n -k5,5 -u | cat header.txt - > "${output_vcf}"
+
+    #if str( $options_type.options_type_selector ) == "full":
+        #if $options_type.optional_inputs.optional_inputs_selector:
+            #if $options_type.optional_inputs.output_failed_alleles_option:
+                &&
+                for i in `cat regions.bed | awk '{print $1":"$2".."$3}'`;
+                do
+                    cat ./failed_alleles/part_"\$i".bed
+                    ;
+                done > '${output_failed_alleles_bed}'
+            #end if
+
+            #if $options_type.optional_inputs.output_trace_option:
+                &&
+                for i in `cat regions.bed | awk '{print $1":"$2".."$3}'`;
+                do
+                    cat ./trace/part_"\$i".txt
+                    ;
+                done > '${output_trace}'
+            #end if
+        #end if
+    #end if
+]]>
     </command>
 
     <inputs>
@@ -205,21 +265,17 @@
                 <option value="history">History</option>
             </param>
             <when value="cached">
-                <repeat name="input_bams" title="Sample BAM file" min="1">
-                    <param name="input_bam" type="data" format="bam" label="BAM file">
-                      <validator type="unspecified_build" />
-                      <validator type="dataset_metadata_in_data_table" table_name="fasta_indexes" metadata_name="dbkey" metadata_column="1" message="Sequences are not currently available for the specified build." />
-                    </param>
-                </repeat>
+                <param name="input_bams" type="data" format="bam" multiple="True" label="BAM file">
+                    <validator type="unspecified_build" />
+                    <validator type="dataset_metadata_in_data_table" table_name="fasta_indexes" metadata_name="dbkey" metadata_column="1" message="Sequences are not currently available for the specified build." />
+                </param>
                 <param name="ref_file" type="select" label="Using reference genome">
                   <options from_data_table="fasta_indexes"></options>
                   <validator type="no_options" message="A built-in reference genome is not available for the build associated with the selected input file"/>
                 </param>
             </when>
             <when value="history"> <!-- FIX ME!!!! -->
-                <repeat name="input_bams" title="Sample BAM file" min="1">
-                    <param name="input_bam" type="data" format="bam" label="BAM file" />
-                </repeat>
+                <param name="input_bams" type="data" format="bam" multiple="True" label="BAM file" />
                 <param name="ref_file" type="data" format="fasta" label="Use the following dataset as the reference sequence" help="You can upload a FASTA sequence to the history and use it as reference" />
             </when>
         </conditional>
@@ -450,22 +506,31 @@
             <filter>( options_type['options_type_selector'] == 'cline' or options_type['options_type_selector'] == 'full' ) and options_type['optional_inputs']['optional_inputs_selector'] is True and options_type['optional_inputs']['output_trace_option'] is True</filter>
         </data>
     </outputs>
-    <tests>
+    <tests><!--
         <test>
             <param name="reference_source_selector" value="history" />
             <param name="ref_file" ftype="fasta" value="freebayes-phix174.fasta"/>
-            <param name="input_bam" ftype="bam" value="freebayes-phix174.bam"/>
+            <param name="input_bams" ftype="bam" value="freebayes-phix174.bam"/>
             <param name="options_type_selector" value="simple"/>
             <output name="output_vcf" file="freebayes-phix174-test1.vcf" compare="contains"/>
         </test>
         <test>
             <param name="reference_source_selector" value="history" />
             <param name="ref_file" ftype="fasta" value="freebayes-phix174.fasta"/>
-            <param name="input_bam" ftype="bam" value="freebayes-phix174.bam"/>
+            <param name="input_bams" ftype="bam" value="freebayes-phix174.bam"/>
             <param name="options_type_selector" value="naive_w_filters"/>
             <param name="min_coverage" value="14"/>
             <output name="output_vcf" file="freebayes-phix174-test2.vcf" compare="contains"/>
+        </test>-->
+        <test>
+            <param name="reference_source_selector" value="history" />
+            <param name="ref_file" ftype="fasta" value="freebayes-phix174.fasta"/>
+            <param name="input_bams" ftype="bam" value="freebayes-phix174.bam"/>
+            <param name="options_type_selector" value="naive_w_filters"/>
+            <param name="min_coverage" value="14"/>
+            <output name="output_vcf" file="freebayes-phix174-test3.vcf" lines_diff="2"/>
         </test>
+
     </tests>
     <help>
 **What it does**
@@ -757,6 +822,7 @@ Algorithmic features::
 For the underlying tool, please cite `Erik Garrison and Gabor Marth. Haplotype-based variant detection from short-read sequencing &lt;http://arxiv.org/abs/1207.3907&gt;`_.
 
 The initial version of the wrapper was produced by Dan Blankenberg and upgraded by Anton Nekrutenko.
+TNG was developed by Bjoern Gruening
 
     </help>
     <citations>

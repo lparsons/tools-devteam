@@ -6,4 +6,10 @@
     <package name="samtools" version="0.1.18">
         <repository name="package_samtools_0_1_18" owner="devteam" />
     </package>
+    <package name="gnu_awk" version="4.1.0">
+        <repository name="package_gnu_awk_4_1_0" owner="iuc" />
+    </package>
+    <package name="gnu_parallel" version="20131122">
+        <repository name="package_gnu_parallel_20131122" owner="iuc" />
+    </package>
 </tool_dependency>
