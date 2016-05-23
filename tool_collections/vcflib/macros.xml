@@ -1,7 +1,7 @@
 <macros>
     <xml name="requirements">
         <requirements>
-            <requirement type="package" version="8a5602bf07">vcflib</requirement>
+            <requirement type="package" version="1.0.0_rc1">vcflib</requirement>
             <yield/>
         </requirements>
     </xml>
